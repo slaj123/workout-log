@@ -1,9 +1,9 @@
-// Workout Log front end. One page, three tabs (Log, History, Lifts), hash
+// Workout Log front end. One page, four tabs (Log, History, Lifts, Settings), hash
 // routes, no framework. State comes from GET /api/state in one call; the
 // form edits a plain session object ("draft") shaped like public/model.js
 // expects, and Save sends it whole. A new, unsaved entry is kept in
 // localStorage so a dropped connection mid-gym loses nothing.
-import { TYPES, LIFT_DAYS, CONDITIONS, GRADES, TAPE_COLORS, describe, pacificDay, suggestNext } from "/model.js";
+import { TYPES, ENABLED_TYPES, LIFT_DAYS, CONDITIONS, GRADES, TAPE_COLORS, describe, trainingDay, suggestNext, configure } from "/model.js";
 
 const TYPE_INFO = {
   lifting: { label: "Lift", mark: "LF" },
@@ -80,6 +80,7 @@ async function api(method, path, body) {
 
 async function load() {
   state = await api("GET", "/api/state");
+  configure(state.settings); // your activity types, lists and time zone
 }
 
 // ---------- drafts ----------
@@ -97,9 +98,9 @@ function typeDefaults(type) {
   }
 }
 
-function newDraft(type = "lifting", keep = {}) {
+function newDraft(type = ENABLED_TYPES[0], keep = {}) {
   return {
-    date: keep.date || pacificDay(), type, effort: keep.effort ?? null, durationMin: keep.durationMin ?? null,
+    date: keep.date || trainingDay(), type, effort: keep.effort ?? null, durationMin: keep.durationMin ?? null,
     partners: keep.partners || [], notes: keep.notes || "", watch: null, voice: null, needsDetails: false,
     ...typeDefaults(type),
   };
@@ -243,11 +244,12 @@ function viewLog() {
   const isNew = !editingId;
   const top = h("div", { class: "top" },
     h("h1", {}, isNew ? "Log" : "Edit"),
-    h("input", { type: "date", value: draft.date, "aria-label": "Date", max: pacificDay(),
+    h("input", { type: "date", value: draft.date, "aria-label": "Date", max: trainingDay(),
       onChange: (e) => change((d) => { if (e.target.value) d.date = e.target.value; }) }));
 
   const types = h("div", { class: "row scroll types", role: "tablist" },
-    TYPES.map((t) => h("button", {
+    // Your turned-on activities, plus this entry's own type if it's one you've since turned off.
+    (ENABLED_TYPES.includes(draft.type) ? ENABLED_TYPES : [...ENABLED_TYPES, draft.type]).map((t) => h("button", {
       type: "button", class: "chip", role: "tab", "aria-pressed": String(draft.type === t),
       onClick: () => {
         if (draft.type === t) return;
@@ -290,7 +292,7 @@ function viewLog() {
 // model.js). Shown only on a blank new entry, so it never crowds a log in
 // progress. Hidden per day with the x.
 function nextCard() {
-  const next = suggestNext(state.sessions, state.projects, pacificDay());
+  const next = suggestNext(state.sessions, state.projects, trainingDay());
   if (!next || !next.picks.length) return null;
   const hideKey = "workout-next-hidden";
   try { if (localStorage.getItem(hideKey) === next.date) return null; } catch {}
@@ -702,6 +704,62 @@ function viewLifts() {
 
 // ---------- Login ----------
 
+// ---------- settings ----------
+// What shows up in the app. Saved in the database, over public/setup.js.
+
+const lines = (text) => text.split("\n").map((s) => s.trim()).filter(Boolean);
+
+function viewSettings() {
+  const s = state.settings;
+  const on = new Set(s.types);
+  const typeRow = h("div", { class: "row wrap" }, TYPES.map((t) => h("button", {
+    type: "button", class: "chip", "aria-pressed": String(on.has(t)), disabled: t === "other" ? true : null,
+    title: t === "other" ? "Always on: it's the catch-all" : null,
+    onClick: (e) => { on.has(t) ? on.delete(t) : on.add(t); e.currentTarget.setAttribute("aria-pressed", String(on.has(t))); },
+  }, TYPE_INFO[t].label)));
+
+  const tz = h("input", { type: "text", value: s.timeZone, autocomplete: "off", spellcheck: "false" });
+  const lists = {};
+  const listField = (label, key, value, hint) => {
+    lists[key] = h("textarea", { rows: 4 }, value.join("\n"));
+    return field(label, h("div", {}, lists[key], hint ? h("small", { class: "hint" }, hint) : null));
+  };
+
+  return [
+    h("div", { class: "top" }, h("h1", {}, "Settings")),
+    h("div", { class: "card" },
+      h("h2", {}, "Your activities"),
+      h("p", { class: "hint" }, "Only these show when you log and get suggested. Past entries keep their type."),
+      typeRow),
+    h("div", { class: "card" },
+      field("Time zone", tz),
+      h("p", { class: "hint" }, "Days roll over at 3 a.m. here. Examples: America/New_York, Europe/London.")),
+    h("div", { class: "card" },
+      h("h2", {}, "Starting lists"),
+      h("p", { class: "hint" }, "One per line. Anything new you log is remembered automatically."),
+      listField("Push day lifts", "Push", s.exercises.Push),
+      listField("Pull day lifts", "Pull", s.exercises.Pull),
+      listField("Legs day lifts", "Legs", s.exercises.Legs),
+      listField("Surf spots", "spots", s.spots),
+      listField("Other activities", "activities", s.activities)),
+    h("div", { class: "savebar" }, h("div", { class: "in" },
+      h("button", { type: "button", class: "btn primary wide", onClick: async () => {
+        try {
+          state.settings = await api("PUT", "/api/settings", {
+            types: [...on], timeZone: tz.value.trim(),
+            exercises: { Push: lines(lists.Push.value), Pull: lines(lists.Pull.value), Legs: lines(lists.Legs.value), Other: s.exercises.Other || [] },
+            spots: lines(lists.spots.value), activities: lines(lists.activities.value),
+          });
+          await load();
+          if (state.settings.timeZone !== tz.value.trim()) toast("That time zone wasn't recognized; kept " + state.settings.timeZone);
+          else toast("Saved");
+          clearDraft();
+          render();
+        } catch (e) { if (e.message !== "signed out") toast("Couldn't save. Try again."); }
+      } }, "Save settings"))),
+  ];
+}
+
 function showLogin(message) {
   document.querySelector("nav.tabs")?.remove();
   const input = h("input", { type: "password", autocomplete: "current-password", placeholder: "Passcode", "aria-label": "Passcode" });
@@ -727,6 +785,7 @@ function route() {
   if (hash.startsWith("#session/")) return { tab: "log", id: hash.slice(9) };
   if (hash === "#history") return { tab: "history" };
   if (hash === "#lifts") return { tab: "lifts" };
+  if (hash === "#settings") return { tab: "settings" };
   return { tab: "log" };
 }
 
@@ -748,7 +807,7 @@ async function onRoute() {
       } else {
         editingId = null;
         draft = loadDraft() || suggestedDraft();
-        if (draft.date < pacificDay() && isEmptyDraft(draft)) draft.date = pacificDay();
+        if (draft.date < trainingDay() && isEmptyDraft(draft)) draft.date = trainingDay();
       }
     }
     window.scrollTo(0, 0);
@@ -758,9 +817,9 @@ async function onRoute() {
 
 // A blank entry opens on today's top suggestion (or a lift day).
 function suggestedDraft() {
-  const next = suggestNext(state.sessions, state.projects, pacificDay());
+  const next = suggestNext(state.sessions, state.projects, trainingDay());
   const p = next && next.when === "Today" && next.picks[0];
-  const d = newDraft(p ? p.type : "lifting");
+  const d = newDraft(p ? p.type : ENABLED_TYPES[0]);
   if (p && p.day) d.day = p.day;
   if (p && p.activity) d.activity = p.activity;
   return d;
@@ -773,7 +832,7 @@ function isEmptyDraft(d) {
 function render() {
   const r = route();
   const y = window.scrollY;
-  const view = r.tab === "history" ? viewHistory() : r.tab === "lifts" ? viewLifts() : viewLog();
+  const view = r.tab === "history" ? viewHistory() : r.tab === "lifts" ? viewLifts() : r.tab === "settings" ? viewSettings() : viewLog();
   $app().replaceChildren(...view.flat(Infinity).filter(Boolean));
   renderTabs(r.tab);
   window.scrollTo(0, y);
@@ -792,7 +851,8 @@ function renderTabs(tab) {
   }
   const link = (href, label, t) => h("a", { href, "aria-current": tab === t ? "page" : null,
     onClick: (e) => { if (t === "log" && tab === "log" && editingId) { e.preventDefault(); location.hash = "#log"; } } }, label);
-  nav.replaceChildren(link("#log", "Log", "log"), link("#history", "History", "history"), link("#lifts", "Lifts", "lifts"));
+  nav.replaceChildren(link("#log", "Log", "log"), link("#history", "History", "history"), link("#lifts", "Lifts", "lifts"),
+    link("#settings", "Settings", "settings"));
 }
 
 async function start() {

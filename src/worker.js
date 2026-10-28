@@ -6,7 +6,8 @@
 //                                   Worker, which send X-Ingest-Secret instead
 // If the secrets are missing, every call is refused (503).
 import { configured, login, logout, validSession, sameSecret } from "./auth.js";
-import { cleanSession, watchToSession, memoToSession, buildCatalog, TAPE_COLORS, GRADES } from "../public/model.js";
+import { cleanSession, watchToSession, memoToSession, buildCatalog, TAPE_COLORS, GRADES, configure, cleanSettings, currentSettings } from "../public/model.js";
+import SETUP from "../public/setup.js";
 
 const ID_RE = /^[a-z0-9]{6,40}$/;
 const MAX_BODY = 200_000;
@@ -20,8 +21,9 @@ export default {
       if (!configured(env)) return json({ error: "lock not configured" }, 503);
       if (url.pathname === "/api/login" && request.method === "POST") return await login(request, env, json, readBody);
       if (url.pathname === "/api/logout" && request.method === "POST") return logout();
-      if (url.pathname === "/api/ingest" && request.method === "POST") return await ingest(request, env, url);
+      if (url.pathname === "/api/ingest" && request.method === "POST") { await applySettings(env); return await ingest(request, env, url); }
       if (!(await validSession(request, env))) return json({ error: "signed out" }, 401);
+      await applySettings(env);
       return await route(request, env, url);
     } catch (e) {
       if (e && /^bad /.test(e.message)) return json({ error: e.message }, 400);
@@ -39,6 +41,18 @@ async function route(request, env, url) {
   const m = request.method;
 
   if (collection === "state" && !id && m === "GET") return json(await loadState(env));
+
+  // Settings tab: what shows up and how days are counted. Saved over public/setup.js.
+  if (collection === "settings" && !id) {
+    if (m === "GET") return json(currentSettings());
+    if (m === "PUT") {
+      // Only the fields sent change; the rest of your saved settings stay.
+      const row = await env.DB.prepare("SELECT value FROM settings WHERE name = 'app'").first();
+      const s = { ...(row ? JSON.parse(row.value) : {}), ...cleanSettings(await mustBody(request)) };
+      await env.DB.prepare("INSERT OR REPLACE INTO settings (name, value) VALUES ('app', ?)").bind(JSON.stringify(s)).run();
+      return json(configure({ ...SETUP, ...s }));
+    }
+  }
 
   if (collection === "sessions") {
     if (!id && m === "POST") {
@@ -97,7 +111,13 @@ async function loadState(env) {
   ]);
   const sessions = rows.map((r) => ({ ...JSON.parse(r.data), id: r.id, source: r.source }));
   const projects = prows.map((r) => ({ ...JSON.parse(r.data), id: r.id }));
-  return { sessions, projects, catalog: buildCatalog(sessions) };
+  return { sessions, projects, catalog: buildCatalog(sessions), settings: currentSettings() };
+}
+
+// Your setup file, with anything saved from the Settings tab on top.
+async function applySettings(env) {
+  const row = await env.DB.prepare("SELECT value FROM settings WHERE name = 'app'").first();
+  configure({ ...SETUP, ...(row ? JSON.parse(row.value) : {}) });
 }
 
 async function insertSession(env, s, source) {

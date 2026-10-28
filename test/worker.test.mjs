@@ -8,6 +8,7 @@ import worker from "../src/worker.js";
 function fakeD1() {
   const db = new DatabaseSync(":memory:");
   db.exec(readFileSync(new URL("../migrations/0001_init.sql", import.meta.url), "utf8"));
+  db.exec(readFileSync(new URL("../migrations/0002_settings.sql", import.meta.url), "utf8"));
   const stmt = (sql, args = []) => ({
     bind: (...a) => stmt(sql, a),
     first: async () => db.prepare(sql).get(...args) ?? null,
@@ -117,6 +118,25 @@ assert.strictEqual(surfWatch.watch.avgHr, null);
 const v = state.sessions.find((s) => s.id === voice.body.id);
 assert.strictEqual(v.source, "voice");
 assert.strictEqual(v.quality, 6.5);
+
+// Settings: saved over setup.js, junk dropped, sent back with the state.
+let set = await call("PUT", "/api/settings", { types: ["surfing", "nope"], timeZone: "Europe/London", spots: ["Reef", " ", "Reef"], activities: "not a list" });
+assert.strictEqual(set.status, 200);
+assert.deepStrictEqual(set.body.types, ["surfing", "other"]);      // unknown type dropped, "other" always on
+assert.strictEqual(set.body.timeZone, "Europe/London");
+assert.deepStrictEqual(set.body.spots, ["Reef"]);
+assert.ok(set.body.activities.length > 0, "a bad list leaves the old one in place");
+assert.strictEqual((await call("PUT", "/api/settings", { timeZone: "Mars/Olympus" })).body.timeZone, "Europe/London");
+const st = (await call("GET", "/api/state")).body;
+assert.deepStrictEqual(st.settings.types, ["surfing", "other"]);
+assert.ok(st.catalog.spots.includes("Reef"));
+// Turned-off activities are never suggested.
+const { suggestNext, configure } = await import("../public/model.js");
+configure({ types: ["surfing", "other"] });
+const sug = suggestNext([{ date: "2026-10-01", type: "lifting", day: "Push" }], [], "2026-10-02");
+assert.ok(sug.picks.every((p) => ["surfing", "other"].includes(p.type)), JSON.stringify(sug.picks));
+assert.strictEqual(sug.avoid, null);
+await call("PUT", "/api/settings", { types: ["lifting", "surfing", "climbing", "tennis", "flag-football", "basketball"] });
 
 // Lockout: 5 wrong tries from one IP, then even the right passcode is refused.
 cookie = "";

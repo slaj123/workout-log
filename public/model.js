@@ -3,15 +3,21 @@
 // what the catalog (dropdown contents) is built from. No I/O here, so the
 // Worker, the import script and the tests all share it.
 
+import SETUP from "./setup.js";
+
+// Every activity the app knows how to log. Which ones show up is your choice:
+// public/setup.js (written by `npm run setup`), then the in-app Settings tab.
 export const TYPES = ["lifting", "surfing", "climbing", "tennis", "flag-football", "basketball", "other"];
 export const LIFT_DAYS = ["Push", "Pull", "Legs", "Other"];
 export const CONDITIONS = ["clean", "glassy", "peaky", "mushy", "closeouts", "onshore", "offshore", "choppy", "fog"];
 export const GRADES = ["VB", "V0", "V1", "V2", "V3", "V4", "V5", "V6", "V7", "V8"];
 export const TAPE_COLORS = ["pink", "red", "orange", "yellow", "green", "blue", "purple", "black", "white"];
 
-// Seeds so the dropdowns are useful before history fills them. Edit these to
-// your own lifts, surf spots and activities; anything you log is added automatically.
-export const SEED_EXERCISES = {
+// Seeds so the dropdowns are useful before history fills them. These are only
+// fallbacks: configure() replaces them with your setup and Settings. Anything
+// you log is added to the dropdowns automatically.
+export let ENABLED_TYPES = TYPES;
+export let SEED_EXERCISES = {
   Push: ["Dumbbell Bench Press", "Incline Dumbbell Bench Press", "Seated Bench Press", "Overhead Press", "Cable Fly",
     "Dumbbell Fly", "Lateral Raise", "Tricep Pushdown", "Abdominal Crunch", "Abdominal Twist"],
   Pull: ["Lat Pulldown", "Seated Row", "Dumbbell Row", "Face Pull", "Rope Curl", "Seated Curl"],
@@ -19,8 +25,8 @@ export const SEED_EXERCISES = {
     "Kettlebell Swing"],
   Other: [],
 };
-export const SEED_SPOTS = ["Home break"];
-export const SEED_ACTIVITIES = ["Yoga", "Running", "Kettlebell Circuit", "Kitesurfing", "Swimming", "Golf"];
+export let SEED_SPOTS = ["Home break"];
+export let SEED_ACTIVITIES = ["Yoga", "Running", "Kettlebell Circuit", "Kitesurfing", "Swimming", "Golf"];
 
 // ---------- small cleaners ----------
 
@@ -37,11 +43,12 @@ const strList = (v, maxItems = 20, max = 60) =>
   [...new Set((Array.isArray(v) ? v : []).map((x) => str(x, max)).filter(Boolean))].slice(0, maxItems);
 const isDay = (v) => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) && !isNaN(new Date(v + "T12:00:00Z"));
 
-// The training day, Pacific time, running to 3 a.m. (after midnight still
-// counts as the day before). Change the time zone below if you're elsewhere.
+// The training day in your time zone, running to 3 a.m. (after midnight still
+// counts as the day before).
 export const DAY_CUTOFF_HOURS = 3;
-export function pacificDay(d = new Date()) {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles" })
+let TIME_ZONE = "America/Los_Angeles";
+export function trainingDay(d = new Date()) {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: TIME_ZONE })
     .format(new Date(d.getTime() - DAY_CUTOFF_HOURS * 3600e3));
 }
 
@@ -178,11 +185,11 @@ const WATCH_TYPE_MAP = [
   [/basketball/i, "basketball"],
 ];
 
-export function watchToSession(body, today = pacificDay()) {
+export function watchToSession(body, today = trainingDay()) {
   const activity = str(body.workoutType || body.activity || body.type, 60);
   const type = (WATCH_TYPE_MAP.find(([re]) => re.test(activity)) || [null, "other"])[1];
   const startDate = new Date(str(body.start, 40).replace(/\s+at\s+/i, " "));
-  const date = isNaN(startDate) ? today : pacificDay(startDate);
+  const date = isNaN(startDate) ? today : trainingDay(startDate);
   let durationMin = leadingNumber(body.duration);
   // Shortcuts sometimes hands duration in seconds or as "1:05:00".
   if (typeof body.duration === "string" && /^\d+:\d{2}(:\d{2})?$/.test(body.duration.trim())) {
@@ -215,7 +222,42 @@ export function watchToSession(body, today = pacificDay()) {
 const ALIASES = { "curls rope machine": "Rope Curl", "rope curls": "Rope Curl", "single leg press": "Leg Press" };
 const normName = (n) => n.toLowerCase().replace(/[^a-z ]/g, " ").replace(/\s+/g, " ").trim()
   .split(" ").map((w) => w.replace(/ies$/, "y").replace(/s$/, "").replace(/e$/, "")).join("");
-const SEED_BY_NORM = new Map(Object.values(SEED_EXERCISES).flat().map((n) => [normName(n), n]));
+let SEED_BY_NORM = new Map();
+
+// ---------- settings ----------
+
+const validTz = (tz) => { try { new Intl.DateTimeFormat("en-US", { timeZone: tz }); return true; } catch { return false; } };
+
+// Cleans settings from setup.js or the Settings tab. Missing fields stay unset.
+export function cleanSettings(input = {}) {
+  const out = {};
+  if (Array.isArray(input.types)) out.types = TYPES.filter((t) => input.types.includes(t));
+  if (typeof input.timeZone === "string" && validTz(input.timeZone)) out.timeZone = input.timeZone;
+  if (input.exercises && typeof input.exercises === "object") {
+    out.exercises = Object.fromEntries(LIFT_DAYS.map((d) => [d, strList(input.exercises[d], 60, 80)]));
+  }
+  if (Array.isArray(input.spots)) out.spots = strList(input.spots, 40, 60);
+  if (Array.isArray(input.activities)) out.activities = strList(input.activities, 40, 60);
+  return out;
+}
+
+// Applies settings to this module. "other" always stays on: it's the catch-all.
+export function configure(input = {}) {
+  const s = cleanSettings(input);
+  if (s.types) ENABLED_TYPES = TYPES.filter((t) => t === "other" || s.types.includes(t));
+  if (s.timeZone) TIME_ZONE = s.timeZone;
+  if (s.exercises) SEED_EXERCISES = s.exercises;
+  if (s.spots) SEED_SPOTS = s.spots;
+  if (s.activities) SEED_ACTIVITIES = s.activities;
+  SEED_BY_NORM = new Map(Object.values(SEED_EXERCISES).flat().map((n) => [normName(n), n]));
+  return currentSettings();
+}
+
+export const currentSettings = () => ({
+  types: ENABLED_TYPES, timeZone: TIME_ZONE, exercises: SEED_EXERCISES, spots: SEED_SPOTS, activities: SEED_ACTIVITIES,
+});
+
+configure(SETUP);
 
 export function canonicalExercise(name) {
   const clean = str(name, 80);
@@ -237,7 +279,7 @@ const VOICE_TYPE_MAP = [
 export function memoToSession(memo) {
   const category = str(memo.category, 60);
   const type = (VOICE_TYPE_MAP.find(([re]) => re.test(category)) || [null, "other"])[1];
-  const date = isDay(memo.recordedOn) ? memo.recordedOn : pacificDay(new Date(memo.date));
+  const date = isDay(memo.recordedOn) ? memo.recordedOn : trainingDay(new Date(memo.date));
   const ratings = Array.isArray(memo.ratings) ? memo.ratings : [];
   const rating = (re) => (ratings.find((r) => re.test(r.label || "")) || {}).score;
   const s = {
@@ -384,7 +426,7 @@ const weekday = (day) => new Intl.DateTimeFormat("en-US", { timeZone: "UTC", wee
 // sessions: any order. Returns null with no recent history, else
 // { date, when: "Today" | "Tomorrow", picks: [{ type, day?, activity?, label, reason }], avoid, note }.
 // "Today" until something is logged today, then "Tomorrow".
-export function suggestNext(sessions, projects = [], today = pacificDay()) {
+export function suggestNext(sessions, projects = [], today = trainingDay()) {
   const loggedToday = sessions.some((s) => s.date === today);
   const target = loggedToday ? addDays(today, 1) : today;
   const recent = sessions
@@ -464,20 +506,22 @@ export function suggestNext(sessions, projects = [], today = pacificDay()) {
     }
   }
 
-  options.sort((a, b) => b.score - a.score);
-  if (!result.picks.length) {
-    result.picks.push(options[0]);
-    const second = options.find((o) => o !== options[0] && o.family !== options[0].family && o.score > 0.6);
+  const usable = options.filter((o) => ENABLED_TYPES.includes(o.type));
+  usable.sort((a, b) => b.score - a.score);
+  if (!result.picks.length && usable.length) {
+    result.picks.push(usable[0]);
+    const second = usable.find((o) => o !== usable[0] && o.family !== usable[0].family && o.score > 0.6);
     if (second) result.picks.push(second);
   }
 
   // Warn off the most fatigued lift day.
   const worst = GROUPS.reduce((a, b) => (fatigue[b] > fatigue[a] ? b : a));
   const worstDay = ROTATION.find((d) => GROUP_OF[d] === worst);
-  if (fatigue[worst] >= 0.8 && why[worst].length && !result.picks.some((p) => p.day === worstDay)) {
+  const lifting = ENABLED_TYPES.includes("lifting");
+  if (lifting && fatigue[worst] >= 0.8 && why[worst].length && !result.picks.some((p) => p.day === worstDay)) {
     result.avoid = `Skip ${worstDay}: ${why[worst].join(", ")}.`;
   }
-  const neglected = ROTATION.filter((d) => (since[`lifting:${d}`] ?? NEVER) >= 10 && !result.picks.some((p) => p.day === d) && !(result.avoid && d === worstDay));
+  const neglected = !lifting ? [] : ROTATION.filter((d) => (since[`lifting:${d}`] ?? NEVER) >= 10 && !result.picks.some((p) => p.day === d) && !(result.avoid && d === worstDay));
   if (neglected.length) result.note = `${neglected.join(" and ")} not trained in 10+ days.`;
 
   result.picks = result.picks.map(({ score, family, ...p }) => p);

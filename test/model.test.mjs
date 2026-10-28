@@ -1,4 +1,5 @@
 import assert from "node:assert";
+import "./fixed-setup.mjs";
 import { cleanSession, watchToSession, memoToSession, buildCatalog, describe, leadingNumber, canonicalExercise, suggestNext } from "../public/model.js";
 
 // --- cleanSession: normal lifting session ---

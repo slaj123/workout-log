@@ -28,33 +28,25 @@ npm test
 
 ## 2. Make it yours
 
-Open `public/model.js`:
+```bash
+npm run setup
+```
 
-- `SEED_EXERCISES`: the lifts that appear in the dropdowns for Push, Pull and Legs days.
-- `SEED_SPOTS`: your surf spots.
-- `SEED_ACTIVITIES`: anything else you do.
-- `pacificDay()`: the day rolls over at 3 a.m. Pacific time. Change `America/Los_Angeles` to your time zone.
+It asks a few questions: your time zone, which activities you do (lifting, surfing, climbing, tennis, flag football, basketball, other), your usual Push, Pull and Legs lifts, your surf spots and anything else you do. It saves your answers to `setup.json` (git-ignored) and writes `public/setup.js`, which the app starts from.
 
-Anything new you type while logging is remembered, so the seeds only need to be a starting point.
+If you say yes to local testing, it also creates `.dev.vars` with a random local passcode and sets up a local database.
+
+**Change your mind later?** Open the app's **Settings** tab. Turn activities on or off, change your time zone, or edit your lists. That's saved in your database and needs no redeploy. Past workouts keep their type even if you turn it off.
+
+**Set up with Claude Code:** open this folder in [Claude Code](https://claude.com/claude-code) and type `/setup`. It asks the same questions in plain conversation, writes `setup.json` for you, runs `npm run setup -- --apply`, and walks you through deploying.
 
 ## 3. Run it locally
 
-Create a file named `.dev.vars` in the project folder (it is git-ignored):
-
-```
-WORKOUT_PASSCODE=local-test-passcode
-SESSION_SECRET=any-random-string-at-least-32-characters-long
-INGEST_SECRET=another-random-string-24-plus
-```
-
-Then create the local database and start the app:
-
 ```bash
-npx wrangler d1 migrations apply workout-log --local
 npm run dev
 ```
 
-Open http://localhost:8787 and log in with your local passcode.
+Open http://localhost:8787 and log in with the passcode in `.dev.vars`.
 
 ## 4. Put it online
 
@@ -115,6 +107,7 @@ Entries that arrive this way are marked *add details* until you fill them in.
 
 ## Changing things later
 
+- **Your activities and lists:** the Settings tab, or rerun `npm run setup`.
 - **Suggestions:** tune the weights in `LOAD` and the scores in `suggestNext()` in `public/model.js`. `npm test` covers the main cases.
 - **Database changes:** add a new file in `migrations/`, then run `npx wrangler d1 migrations apply workout-log --remote`.
 - **Redeploy:** `npm run deploy`.
