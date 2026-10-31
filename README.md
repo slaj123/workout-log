@@ -26,6 +26,8 @@ npm test
 
 `npm test` runs the logic and API tests. They need no account.
 
+**On Windows:** if a `wrangler` step fails with "internal error", the folder path is probably too long (Windows caps paths at 260 characters, and the local database adds a lot). Move the folder somewhere short, like `C:\code\workout-log`, and run the step again.
+
 ## 2. Make it yours
 
 ```bash
